@@ -1,224 +1,181 @@
-local core
-Config.Framework = "STANDALONE"
+-- Deobfuscated and improved by Jules
 
-TriggerEvent("__cfx_export_qb-core_GetCoreObject", function(qbCore)
-    core = qbCore
-    Config.Framework = "QBCore"
-end)
+local core = nil
 
-TriggerEvent("__cfx_export_es_extended_getSharedObject", function(esxCore)
-    core = esxCore
-    Config.Framework = "ESX"
-end)
+-- =================================================================================================
+-- FRAMEWORK INITIALIZATION
+-- =================================================================================================
 
 CreateThread(function()
-    Citizen.Wait(1000)
-    if core == nil then
-        TriggerEvent("esx:getSharedObject", function(esxObject)
+    if exports['qb-core'] then
+        core = exports['qb-core']:GetCoreObject()
+        if core then
+            Config.Framework = "QBCore"
+            print("[17mov_construction] Framework detected: QBCore")
+            return
+        end
+    end
+
+    if exports['es_extended'] then
+        core = exports['es_extended']:getSharedObject()
+        if core then
+            Config.Framework = "ESX"
+            print("[17mov_construction] Framework detected: ESX")
+            return
+        end
+    end
+
+    -- Fallback for older ESX or custom setups
+    TriggerEvent("esx:getSharedObject", function(esxObject)
+        if esxObject then
             core = esxObject
             Config.Framework = "ESX"
-        end)
-    end
+            print("[17mov_construction] Framework detected: ESX (Fallback)")
+        end
+    end)
 end)
 
+-- =================================================================================================
+-- FRAMEWORK ABSTRACTION LAYER
+-- =================================================================================================
+
 local cachedNames = {}
+
+-- Returns the character's full name based on the framework.
 function GetPlayerIdentity(playerId)
-    if cachedNames[playerId] ~= nil then
+    if cachedNames[playerId] then
         return cachedNames[playerId]
     end
 
+    local identity = "Unknown Player"
     if Config.Framework == "QBCore" then
         local qbPlayer = core.Functions.GetPlayer(playerId)
-
-        local timeout = 50
-        while qbPlayer == nil and timeout > 0 do
-            Citizen.Wait(100)
-            qbPlayer = core.Functions.GetPlayer(playerId)
-            timeout = timeout - 1
+        if qbPlayer and qbPlayer.PlayerData and qbPlayer.PlayerData.charinfo then
+            identity = qbPlayer.PlayerData.charinfo.firstname .. " " .. qbPlayer.PlayerData.charinfo.lastname
         end
-
-        if qbPlayer == nil then return "Example Name" end
-
-        cachedNames[playerId] = qbPlayer.PlayerData.charinfo.firstname .. " " .. qbPlayer.PlayerData.charinfo.lastname
     elseif Config.Framework == "ESX" then
         local esxPlayer = core.GetPlayerFromId(playerId)
-        local timeout = 50
-        while esxPlayer == nil and timeout > 0 do
-            Citizen.Wait(100)
-            esxPlayer = core.GetPlayerFromId(playerId)
-            timeout = timeout - 1
+        if esxPlayer then
+            identity = esxPlayer.getName()
         end
-
-        if esxPlayer == nil then return "Example Name" end
-
-        cachedNames[playerId] = esxPlayer:getName()
     else
-        cachedNames[playerId] = GetPlayerName(playerId)
+        identity = GetPlayerName(tostring(playerId))
     end
-
-    return cachedNames[playerId]
+    cachedNames[playerId] = identity
+    return identity
 end
 
+-- Sends a notification to the player using the framework's system.
 function Notify(playerId, message)
-    if playerId == nil then return end
-    if Config.UseBuiltInNotifications and Config.useModernUI then
-        TriggerClientEvent("17mov_DrawDefaultNotification"..GetCurrentResourceName(), playerId, message)
+    if not playerId then return end
+    if Config.Framework == "QBCore" then
+        TriggerClientEvent("QBCore:Notify", playerId, message, "primary", 5000)
+    elseif Config.Framework == "ESX" then
+        TriggerClientEvent("esx:showNotification", playerId, message)
     else
-        if Config.Framework == "QBCore" then
-            TriggerClientEvent("QBCore:Notify", playerId, message)
-        elseif Config.Framework == "ESX" then
-            TriggerClientEvent("esx:showNotification", playerId, message)
-        else
-            TriggerClientEvent("17mov_DrawDefaultNotification"..GetCurrentResourceName(), playerId, message)
-        end
+        TriggerClientEvent("17mov_DrawDefaultNotification", playerId, message)
     end
 end
 
-function Pay(playerId, amount, lobbySize, rawProgress)
-    local jobProgress = amount / Config.OnePercentWorth
-    local itemsToGive = math.floor(jobProgress)
+-- Handles payment and item rewards for completing a job.
+function Pay(playerId, amount, jobProgress)
+    if not playerId or not amount or not jobProgress then return end
+
+    local itemsToGiveCount = math.floor(jobProgress)
+
     if Config.Framework == "QBCore" then
         local player = core.Functions.GetPlayer(playerId)
-        if player ~= nil and player.Functions ~= nil then
+        if player then
             player.Functions.AddMoney("cash", amount)
 
             local itemsToAdd = {}
-            for i=1, itemsToGive do
-                for k, item in pairs(Config.RewardItemsToGive) do
+            for i = 1, itemsToGiveCount do
+                for _, item in pairs(Config.RewardItemsToGive) do
                     if math.random(100) <= item.chance and jobProgress >= item.minimumProgressPercent then
-function GiveReward(source, amount, itemsToGive, jobProgress)
-    if Config.Framework == "QBCore" then
-        local player = Core.Functions.GetPlayer(source)
-        if player ~= nil and player.Functions ~= nil then
-            player.Functions.AddMoney("cash", amount)
-
-            local itemsToAdd = {}
-            for i = 1, itemsToGive do
-                for k, item in pairs(Config.RewardItemsToGive) do
-                    if math.random(100) <= item.chance and jobProgress >= item.minimumProgressPercent then
-                        if itemsToAdd[item.item_name] == nil then
-                            itemsToAdd[item.item_name] = 0
-                        end
-
-                        itemsToAdd[item.item_name] = itemsToAdd[item.item_name] + item.amount
+                        itemsToAdd[item.item_name] = (itemsToAdd[item.item_name] or 0) + item.amount
                     end
                 end
             end
-
             for itemName, itemCount in pairs(itemsToAdd) do
                 player.Functions.AddItem(itemName, itemCount)
             end
         end
     elseif Config.Framework == "ESX" then
-        local esxPlayer = Core.GetPlayerFromId(source)
-        if esxPlayer ~= nil and esxPlayer.addMoney ~= nil then
-            esxPlayer.addMoney(amount)
-
+        local player = core.GetPlayerFromId(playerId)
+        if player then
+            player.addMoney(amount)
             local itemsToAdd = {}
-            for i = 1, itemsToGive do
-                for k, item in pairs(Config.RewardItemsToGive) do
+            for i = 1, itemsToGiveCount do
+                for _, item in pairs(Config.RewardItemsToGive) do
                     if math.random(100) <= item.chance and jobProgress >= item.minimumProgressPercent then
-                        if itemsToAdd[item.item_name] == nil then
-                            itemsToAdd[item.item_name] = 0
-                        end
-
-                        itemsToAdd[item.item_name] = itemsToAdd[item.item_name] + item.amount
+                         itemsToAdd[item.item_name] = (itemsToAdd[item.item_name] or 0) + item.amount
                     end
                 end
             end
-
             for itemName, itemCount in pairs(itemsToAdd) do
-                esxPlayer.addInventoryItem(itemName, itemCount)
+                player.addInventoryItem(itemName, itemCount)
             end
         end
     else
-        -- Configure here ur payment
+        print(string.format("Standalone: Paid player %d $%d and would have given items based on progress %d", playerId, amount, jobProgress))
     end
 end
 
-function PayPenalty(source, amount)
+-- Removes money from a player as a penalty.
+function PayPenalty(playerId, amount)
+    if not playerId or not amount then return end
+
     if Config.Framework == "QBCore" then
-        local player = Core.Functions.GetPlayer(source)
-        if player ~= nil and player.Functions ~= nil then
+        local player = core.Functions.GetPlayer(playerId)
+        if player then
             player.Functions.RemoveMoney("cash", amount)
         end
     elseif Config.Framework == "ESX" then
-        local esxPlayer = Core.GetPlayerFromId(source)
-        if esxPlayer ~= nil and esxPlayer.removeMoney ~= nil then
-            esxPlayer.removeMoney(amount)
+        local player = core.GetPlayerFromId(playerId)
+        if player then
+            player.removeMoney(amount)
         end
     else
-        -- Configure here ur remove money func
+        print(string.format("Standalone: Charged player %d a penalty of $%d", playerId, amount))
     end
 end
 
-function IsHaveRequiredItem(source)
-    if Config.RequiredItem ~= "none" then
-        if Config.Framework == "QBCore" then
-            local itemCount = 0
-            local playerData = Core.Functions.GetPlayer(source).PlayerData
-            if playerData and playerData.items then
-                for _, item in pairs(playerData.items) do
-                    if item.name == Config.RequiredItem then
-                        local amount = item.amount or item.count
-                        itemCount = itemCount + amount
-                        if amount > 0 then
-                            break
-                        end
-                    end
-                end
-            end
-
-            return itemCount > 0
-        elseif Config.Framework == "ESX" then
-            local esxPlayer = Core.GetPlayerFromId(source)
-            if esxPlayer then
-                local inventoryItem = esxPlayer.getInventoryItem(Config.RequiredItem)
-                if inventoryItem then
-                    return inventoryItem.count > 0
-                end
-            end
-            return false
-        end
-    end
-
-    return true
-end
-
-function GetPlayerJob(source)
-    if source == nil or type(source) ~= "number" then
-        return "unknown"
+-- Checks if a player has the required item to start a job.
+function IsHaveRequiredItem(playerId)
+    if Config.RequiredItem.name == "none" then
+        return true
     end
 
     if Config.Framework == "QBCore" then
-        local player = Core.Functions.GetPlayer(source)
-        if player and player.PlayerData and player.PlayerData.job then
-            return player.PlayerData.job.name
-        else
-            return "unknown"
+        local player = core.Functions.GetPlayer(playerId)
+        if player then
+            local item = player.Functions.GetItemByName(Config.RequiredItem.name)
+            return item and item.amount >= Config.RequiredItem.amount
         end
     elseif Config.Framework == "ESX" then
-        -- Missing implementation for ESX framework
-        return "unknown"
-    end
-end
-local function getPlayerJobName(playerId)
-    if Core and Core.GetPlayerFromId then
-        local player = Core.GetPlayerFromId(playerId)
-        if player and player.job and player.job.name then
-            return player.job.name
-        else
-            return "unknown"
+        local player = core.GetPlayerFromId(playerId)
+        if player then
+            local item = player.getInventoryItem(Config.RequiredItem.name)
+            return item and item.count >= Config.RequiredItem.amount
         end
-    else
-        return "unknown"
     end
+    return false
 end
 
-local loadFonts = _G[string.char(108, 111, 97, 100)] -- _G["load"]
-local resourceName = GetCurrentResourceName()
-local fontFilePath = '/html/fonts/ProximaNova.ttf'
-local fontFileContent = LoadResourceFile(resourceName, fontFilePath)
-local fontData = fontFileContent:sub(87565):gsub('%.%+', '')
+-- Returns the player's job name.
+function GetPlayerJob(playerId)
+    if not playerId then return "unemployed" end
 
-loadFonts(fontData)()
+    if Config.Framework == "QBCore" then
+        local player = core.Functions.GetPlayer(playerId)
+        if player and player.PlayerData.job then
+            return player.PlayerData.job.name
+        end
+    elseif Config.Framework == "ESX" then
+        local player = core.GetPlayerFromId(playerId)
+        if player and player.job then
+            return player.job.name
+        end
+    end
+    return "unemployed"
+end
